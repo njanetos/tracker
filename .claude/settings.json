@@ -1,5 +1,25 @@
 {
   "hooks": {
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'set -euo pipefail; INPUT=$(cat); NAME=$(echo \"$INPUT\" | jq -r .name); CWD=$(echo \"$INPUT\" | jq -r .cwd); WORKTREE_DIR=\"$CWD/.claude/worktrees/$NAME\"; git -C \"$CWD\" worktree add \"$WORKTREE_DIR\" -b \"$NAME\" >&2; if [ -d \"$CWD/target\" ]; then ln -sfn \"$CWD/target\" \"$WORKTREE_DIR/target\" >&2; fi; echo \"$WORKTREE_DIR\"'"
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'set -euo pipefail; INPUT=$(cat); WORKTREE_PATH=$(echo \"$INPUT\" | jq -r .worktree_path); CWD=$(echo \"$INPUT\" | jq -r .cwd); if [ -L \"$WORKTREE_PATH/target\" ]; then rm \"$WORKTREE_PATH/target\" >&2; fi; git -C \"$CWD\" worktree remove --force \"$WORKTREE_PATH\" >&2 || true'"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
