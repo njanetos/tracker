@@ -1,5 +1,6 @@
 use super::action::{Action, Direction, NoteKey, SideEffect};
 use super::pattern::{Note, Pattern, TimeSignature};
+use crate::audio::instrument::InstrumentId;
 
 pub const DEFAULT_CHANNELS: usize = 4;
 pub const DEFAULT_BPM: f64 = 120.0;
@@ -34,6 +35,10 @@ pub struct AppState {
     pub chunks: Vec<Option<Chunk>>,
     /// Index of the currently selected chunk slot (if any).
     pub selected_chunk: Option<usize>,
+    /// Per-channel instrument assignment (by InstrumentId).
+    pub channel_instruments: Vec<InstrumentId>,
+    /// Available instruments: (id, display name) pairs.
+    pub available_instruments: Vec<(InstrumentId, String)>,
 }
 
 impl AppState {
@@ -42,6 +47,7 @@ impl AppState {
         let bars = DEFAULT_BARS;
         let rows_per_beat = DEFAULT_ROWS_PER_BEAT;
         let num_rows = time_sig.total_rows(bars, rows_per_beat);
+        let default_instrument_id = InstrumentId("sine".to_string());
         Self {
             pattern: Pattern::new(num_rows, DEFAULT_CHANNELS),
             cursor_row: 0,
@@ -55,6 +61,8 @@ impl AppState {
             rows_per_beat,
             chunks: vec![None; 8], // Start with 8 empty slots
             selected_chunk: None,
+            channel_instruments: vec![default_instrument_id.clone(); DEFAULT_CHANNELS],
+            available_instruments: vec![(default_instrument_id, "Sine".to_string())],
         }
     }
 
@@ -206,6 +214,23 @@ impl AppState {
                         self.cursor_channel = 0;
                         effects.push(SideEffect::SendPatternToAudio(self.pattern.clone()));
                     }
+                }
+            }
+            Action::SetChannelInstrument {
+                channel,
+                instrument_id,
+            } => {
+                if channel < self.channel_instruments.len()
+                    && self
+                        .available_instruments
+                        .iter()
+                        .any(|(id, _)| id == &instrument_id)
+                {
+                    self.channel_instruments[channel] = instrument_id.clone();
+                    effects.push(SideEffect::SetChannelInstrument {
+                        channel,
+                        instrument_id,
+                    });
                 }
             }
             Action::MoveChunk { from_slot, to_slot } => {
@@ -751,5 +776,73 @@ mod tests {
         assert_eq!(state.chunks.len(), 8);
         assert!(state.chunks.iter().all(|c| c.is_none()));
         assert_eq!(state.selected_chunk, None);
+    }
+
+    // --- Instrument management tests ---
+
+    #[test]
+    fn test_default_channel_instruments() {
+        let state = AppState::new();
+        let sine_id = InstrumentId("sine".to_string());
+        assert_eq!(state.channel_instruments.len(), DEFAULT_CHANNELS);
+        assert!(state.channel_instruments.iter().all(|id| *id == sine_id));
+        assert_eq!(state.available_instruments.len(), 1);
+        assert_eq!(state.available_instruments[0].0, sine_id);
+        assert_eq!(state.available_instruments[0].1, "Sine");
+    }
+
+    #[test]
+    fn test_set_channel_instrument_emits_side_effect() {
+        let mut state = AppState::new();
+        let sine_id = InstrumentId("sine".to_string());
+        let effects = state.apply(Action::SetChannelInstrument {
+            channel: 0,
+            instrument_id: sine_id.clone(),
+        });
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            SideEffect::SetChannelInstrument {
+                channel: 0,
+                instrument_id,
+            } if *instrument_id == sine_id
+        )));
+    }
+
+    #[test]
+    fn test_set_channel_instrument_updates_state() {
+        let mut state = AppState::new();
+        let sine_id = InstrumentId("sine".to_string());
+        state.apply(Action::SetChannelInstrument {
+            channel: 2,
+            instrument_id: sine_id.clone(),
+        });
+        assert_eq!(state.channel_instruments[2], sine_id);
+    }
+
+    #[test]
+    fn test_set_channel_instrument_invalid_channel_ignored() {
+        let mut state = AppState::new();
+        let sine_id = InstrumentId("sine".to_string());
+        let effects = state.apply(Action::SetChannelInstrument {
+            channel: 99,
+            instrument_id: sine_id,
+        });
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn test_set_channel_instrument_unknown_id_ignored() {
+        let mut state = AppState::new();
+        let unknown_id = InstrumentId("unknown_plugin".to_string());
+        let effects = state.apply(Action::SetChannelInstrument {
+            channel: 0,
+            instrument_id: unknown_id,
+        });
+        assert!(effects.is_empty());
+        // Should still be sine
+        assert_eq!(
+            state.channel_instruments[0],
+            InstrumentId("sine".to_string())
+        );
     }
 }

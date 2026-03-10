@@ -9,17 +9,19 @@ use super::render::{render_block, SequencerState};
 use crate::core::pattern::Pattern;
 use crate::core::state::DEFAULT_CHANNELS;
 
-#[derive(Debug)]
-#[allow(dead_code)]
 pub enum AudioCommand {
     Play,
     Stop,
     UpdatePattern(Pattern),
-    SetBpm(f64),
     /// Update timing parameters (rows_per_beat, beat_value/denominator).
     SetTiming {
         rows_per_beat: usize,
         beat_value: u8,
+    },
+    /// Swap the instrument on a channel. Sends note-off to the old instrument.
+    SetInstrument {
+        channel: usize,
+        instrument: Box<dyn InstrumentPlugin>,
     },
 }
 
@@ -90,9 +92,7 @@ impl AudioEngine {
         beat_value: u8,
     ) -> Result<Stream, String> {
         let mut sequencer = SequencerState::new(bpm, sample_rate, rows_per_beat, beat_value);
-        let mut current_bpm = bpm;
-        let mut current_rows_per_beat = rows_per_beat;
-        let mut current_beat_value = beat_value;
+        let current_bpm = bpm;
         let mut pattern = initial_pattern;
 
         // Create one instrument per channel
@@ -124,22 +124,25 @@ impl AudioEngine {
                             AudioCommand::UpdatePattern(new_pattern) => {
                                 pattern = new_pattern;
                             }
-                            AudioCommand::SetBpm(new_bpm) => {
-                                current_bpm = new_bpm;
-                                sequencer.set_bpm(
-                                    new_bpm,
-                                    sample_rate,
-                                    current_rows_per_beat,
-                                    current_beat_value,
-                                );
-                            }
                             AudioCommand::SetTiming {
                                 rows_per_beat: rpb,
                                 beat_value: bv,
                             } => {
-                                current_rows_per_beat = rpb;
-                                current_beat_value = bv;
                                 sequencer.set_bpm(current_bpm, sample_rate, rpb, bv);
+                            }
+                            AudioCommand::SetInstrument {
+                                channel,
+                                instrument,
+                            } => {
+                                if channel < instruments.len() {
+                                    // Send note-off to old instrument before replacing
+                                    if sequencer.active_note[channel] != 0 {
+                                        instruments[channel]
+                                            .note_off(sequencer.active_note[channel]);
+                                        sequencer.active_note[channel] = 0;
+                                    }
+                                    instruments[channel] = instrument;
+                                }
                             }
                         }
                     }

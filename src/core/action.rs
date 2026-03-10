@@ -1,4 +1,5 @@
 use super::pattern::{Note, Pattern};
+use crate::audio::instrument::InstrumentId;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Direction {
@@ -118,6 +119,11 @@ pub enum Action {
     SelectChunk { slot: usize },
     /// Move a chunk from one slot to another (drag-and-drop reorder).
     MoveChunk { from_slot: usize, to_slot: usize },
+    /// Set the instrument for a channel.
+    SetChannelInstrument {
+        channel: usize,
+        instrument_id: InstrumentId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -129,5 +135,9 @@ pub enum SideEffect {
     SendTimingToAudio {
         rows_per_beat: usize,
         beat_value: u8,
+    },
+    SetChannelInstrument {
+        channel: usize,
+        instrument_id: InstrumentId,
     },
 }

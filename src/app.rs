@@ -2,6 +2,7 @@ use eframe::egui;
 use std::sync::atomic::Ordering;
 
 use crate::audio::engine::{AudioCommand, AudioEngine};
+use crate::audio::instrument::{InstrumentFactory, SineInstrumentFactory};
 use crate::core::action::SideEffect;
 use crate::core::state::AppState;
 use crate::ui::{chunk_sidebar, pattern_editor, toolbar};
@@ -10,6 +11,7 @@ pub struct TrackerApp {
     state: AppState,
     audio_engine: Option<AudioEngine>,
     audio_error: Option<String>,
+    instrument_factories: Vec<Box<dyn InstrumentFactory>>,
 }
 
 impl TrackerApp {
@@ -32,6 +34,7 @@ impl TrackerApp {
             state,
             audio_engine,
             audio_error: None,
+            instrument_factories: vec![Box::new(SineInstrumentFactory::new())],
         }
     }
 
@@ -60,6 +63,23 @@ impl TrackerApp {
                         rows_per_beat,
                         beat_value,
                     });
+                }
+                SideEffect::SetChannelInstrument {
+                    channel,
+                    instrument_id,
+                } => {
+                    // Find the factory and create the instrument
+                    if let Some(factory) = self
+                        .instrument_factories
+                        .iter()
+                        .find(|f| f.id() == &instrument_id)
+                    {
+                        let instrument = factory.create();
+                        engine.send(AudioCommand::SetInstrument {
+                            channel,
+                            instrument,
+                        });
+                    }
                 }
             }
         }

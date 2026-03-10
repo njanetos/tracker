@@ -1,10 +1,59 @@
 use crate::core::pattern::pitch_to_freq;
 
+/// Unique identifier for an instrument type (e.g. "sine", or a VST3 plugin path).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct InstrumentId(pub String);
+
+impl std::fmt::Display for InstrumentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[allow(dead_code)]
 pub trait InstrumentPlugin: Send {
     fn note_on(&mut self, pitch: u8, velocity: u8);
     fn note_off(&mut self, pitch: u8);
     /// Render mono audio into the buffer (additive — adds to existing contents).
     fn render(&mut self, buffer: &mut [f32], sample_rate: f32);
+    fn set_sample_rate(&mut self, _sample_rate: f32) {}
+    fn name(&self) -> &str {
+        "Unknown"
+    }
+}
+
+/// Factory for creating instrument instances. Used to create instruments on the
+/// UI thread and send them to the audio thread via the ring buffer.
+#[allow(dead_code)]
+pub trait InstrumentFactory: Send + Sync {
+    fn id(&self) -> &InstrumentId;
+    fn name(&self) -> &str;
+    fn create(&self) -> Box<dyn InstrumentPlugin>;
+}
+
+/// Factory for the built-in sine wave instrument.
+pub struct SineInstrumentFactory {
+    id: InstrumentId,
+}
+
+impl SineInstrumentFactory {
+    pub fn new() -> Self {
+        Self {
+            id: InstrumentId("sine".to_string()),
+        }
+    }
+}
+
+impl InstrumentFactory for SineInstrumentFactory {
+    fn id(&self) -> &InstrumentId {
+        &self.id
+    }
+    fn name(&self) -> &str {
+        "Sine"
+    }
+    fn create(&self) -> Box<dyn InstrumentPlugin> {
+        Box::new(TestSineInstrument::new())
+    }
 }
 
 const MAX_VOICES: usize = 16;
@@ -49,6 +98,10 @@ impl Default for TestSineInstrument {
 }
 
 impl InstrumentPlugin for TestSineInstrument {
+    fn name(&self) -> &str {
+        "Sine"
+    }
+
     fn note_on(&mut self, pitch: u8, velocity: u8) {
         // First, try to reuse a voice already playing this pitch
         if let Some(v) = self
@@ -189,6 +242,25 @@ mod tests {
         // One more should steal
         inst.note_on(90, 100);
         // Should not panic, and the stolen voice should play pitch 90
+        let mut buf = vec![0.0_f32; 256];
+        inst.render(&mut buf, 44100.0);
+        assert!(buf.iter().any(|&s| s != 0.0));
+    }
+
+    #[test]
+    fn test_sine_instrument_name() {
+        let inst = TestSineInstrument::new();
+        assert_eq!(inst.name(), "Sine");
+    }
+
+    #[test]
+    fn test_sine_factory_creates_working_instrument() {
+        let factory = SineInstrumentFactory::new();
+        assert_eq!(factory.id(), &InstrumentId("sine".to_string()));
+        assert_eq!(factory.name(), "Sine");
+
+        let mut inst = factory.create();
+        inst.note_on(69, 127);
         let mut buf = vec![0.0_f32; 256];
         inst.render(&mut buf, 44100.0);
         assert!(buf.iter().any(|&s| s != 0.0));
