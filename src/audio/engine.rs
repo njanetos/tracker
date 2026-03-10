@@ -16,6 +16,11 @@ pub enum AudioCommand {
     Stop,
     UpdatePattern(Pattern),
     SetBpm(f64),
+    /// Update timing parameters (rows_per_beat, beat_value/denominator).
+    SetTiming {
+        rows_per_beat: usize,
+        beat_value: u8,
+    },
 }
 
 pub struct AudioEngine {
@@ -26,7 +31,12 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
-    pub fn new(initial_pattern: Pattern, bpm: f64) -> Result<Self, String> {
+    pub fn new(
+        initial_pattern: Pattern,
+        bpm: f64,
+        rows_per_beat: usize,
+        beat_value: u8,
+    ) -> Result<Self, String> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -51,6 +61,8 @@ impl AudioEngine {
             sample_rate,
             channels,
             playback_row_writer,
+            rows_per_beat,
+            beat_value,
         )?;
 
         stream
@@ -74,8 +86,13 @@ impl AudioEngine {
         sample_rate: f64,
         channels: u16,
         playback_row: Arc<AtomicUsize>,
+        rows_per_beat: usize,
+        beat_value: u8,
     ) -> Result<Stream, String> {
-        let mut sequencer = SequencerState::new(bpm, sample_rate);
+        let mut sequencer = SequencerState::new(bpm, sample_rate, rows_per_beat, beat_value);
+        let mut current_bpm = bpm;
+        let mut current_rows_per_beat = rows_per_beat;
+        let mut current_beat_value = beat_value;
         let mut pattern = initial_pattern;
 
         // Create one instrument per channel
@@ -108,7 +125,21 @@ impl AudioEngine {
                                 pattern = new_pattern;
                             }
                             AudioCommand::SetBpm(new_bpm) => {
-                                sequencer.set_bpm(new_bpm, sample_rate);
+                                current_bpm = new_bpm;
+                                sequencer.set_bpm(
+                                    new_bpm,
+                                    sample_rate,
+                                    current_rows_per_beat,
+                                    current_beat_value,
+                                );
+                            }
+                            AudioCommand::SetTiming {
+                                rows_per_beat: rpb,
+                                beat_value: bv,
+                            } => {
+                                current_rows_per_beat = rpb;
+                                current_beat_value = bv;
+                                sequencer.set_bpm(current_bpm, sample_rate, rpb, bv);
                             }
                         }
                     }

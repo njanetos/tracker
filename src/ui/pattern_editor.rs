@@ -4,6 +4,21 @@ use crate::core::action::{Action, Direction, NoteKey};
 use crate::core::pattern::{format_note, NOTE_OFF};
 use crate::core::state::AppState;
 
+/// Determine the visual weight of a row based on time signature structure.
+/// Returns 2 for bar lines, 1 for beat lines, 0 for normal rows.
+fn row_weight(row: usize, state: &AppState) -> u8 {
+    let rows_per_beat = state.rows_per_beat;
+    let rows_per_bar = state.time_signature.rows_per_bar(rows_per_beat);
+
+    if rows_per_bar > 0 && row.is_multiple_of(rows_per_bar) {
+        2 // bar boundary
+    } else if rows_per_beat > 0 && row.is_multiple_of(rows_per_beat) {
+        1 // beat boundary
+    } else {
+        0
+    }
+}
+
 const CELL_WIDTH: f32 = 64.0;
 const CELL_HEIGHT: f32 = 20.0;
 const ROW_NUM_WIDTH: f32 = 32.0;
@@ -59,9 +74,10 @@ pub fn draw_pattern_editor(
                     egui::pos2(origin.x, y),
                     egui::vec2(ROW_NUM_WIDTH, CELL_HEIGHT),
                 );
-                let row_bg = if row % 16 == 0 {
+                let weight = row_weight(row, state);
+                let row_bg = if weight == 2 {
                     egui::Color32::from_rgb(50, 50, 50)
-                } else if row % 4 == 0 {
+                } else if weight == 1 {
                     egui::Color32::from_rgb(40, 40, 40)
                 } else {
                     egui::Color32::from_rgb(30, 30, 30)
@@ -87,9 +103,9 @@ pub fn draw_pattern_editor(
                         egui::Color32::from_rgb(60, 60, 140) // cursor
                     } else if state.is_playing && row == playback_row {
                         egui::Color32::from_rgb(40, 80, 40) // playback
-                    } else if row % 16 == 0 {
+                    } else if weight == 2 {
                         egui::Color32::from_rgb(50, 50, 50)
-                    } else if row % 4 == 0 {
+                    } else if weight == 1 {
                         egui::Color32::from_rgb(40, 40, 40)
                     } else {
                         egui::Color32::from_rgb(30, 30, 30)

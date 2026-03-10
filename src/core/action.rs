@@ -104,6 +104,12 @@ pub enum Action {
     SetOctave(u8),
     /// Set how many rows the cursor advances after entering a note.
     SetEditStep(usize),
+    /// Set the time signature (numerator, denominator).
+    SetTimeSignature { numerator: u8, denominator: u8 },
+    /// Set the pattern length in bars.
+    SetBars(usize),
+    /// Set how many rows represent one beat (denominator-unit).
+    SetRowsPerBeat(usize),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -112,4 +118,8 @@ pub enum SideEffect {
     StartAudio,
     StopAudio,
     SendPatternToAudio(Pattern),
+    SendTimingToAudio {
+        rows_per_beat: usize,
+        beat_value: u8,
+    },
 }
