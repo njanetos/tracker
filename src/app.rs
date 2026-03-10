@@ -15,7 +15,12 @@ pub struct TrackerApp {
 impl TrackerApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let state = AppState::new();
-        let audio_engine = match AudioEngine::new(state.pattern.clone(), state.bpm) {
+        let audio_engine = match AudioEngine::new(
+            state.pattern.clone(),
+            state.bpm,
+            state.rows_per_beat,
+            state.time_signature.denominator,
+        ) {
             Ok(engine) => Some(engine),
             Err(e) => {
                 eprintln!("Failed to initialize audio: {}", e);
@@ -46,6 +51,15 @@ impl TrackerApp {
                 }
                 SideEffect::SendPatternToAudio(pattern) => {
                     engine.send(AudioCommand::UpdatePattern(pattern));
+                }
+                SideEffect::SendTimingToAudio {
+                    rows_per_beat,
+                    beat_value,
+                } => {
+                    engine.send(AudioCommand::SetTiming {
+                        rows_per_beat,
+                        beat_value,
+                    });
                 }
             }
         }

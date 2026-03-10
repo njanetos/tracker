@@ -1,11 +1,12 @@
 use super::action::{Action, Direction, NoteKey, SideEffect};
-use super::pattern::{Note, Pattern};
+use super::pattern::{Note, Pattern, TimeSignature};
 
-pub const DEFAULT_ROWS: usize = 64;
 pub const DEFAULT_CHANNELS: usize = 4;
 pub const DEFAULT_BPM: f64 = 120.0;
 pub const DEFAULT_OCTAVE: u8 = 4;
 pub const DEFAULT_EDIT_STEP: usize = 1;
+pub const DEFAULT_ROWS_PER_BEAT: usize = 4;
+pub const DEFAULT_BARS: usize = 4;
 
 #[derive(Clone, Debug)]
 pub struct AppState {
@@ -16,18 +17,28 @@ pub struct AppState {
     pub bpm: f64,
     pub octave: u8,
     pub edit_step: usize,
+    pub time_signature: TimeSignature,
+    pub bars: usize,
+    pub rows_per_beat: usize,
 }
 
 impl AppState {
     pub fn new() -> Self {
+        let time_sig = TimeSignature::default(); // 4/4
+        let bars = DEFAULT_BARS;
+        let rows_per_beat = DEFAULT_ROWS_PER_BEAT;
+        let num_rows = time_sig.total_rows(bars, rows_per_beat);
         Self {
-            pattern: Pattern::new(DEFAULT_ROWS, DEFAULT_CHANNELS),
+            pattern: Pattern::new(num_rows, DEFAULT_CHANNELS),
             cursor_row: 0,
             cursor_channel: 0,
             is_playing: false,
             bpm: DEFAULT_BPM,
             octave: DEFAULT_OCTAVE,
             edit_step: DEFAULT_EDIT_STEP,
+            time_signature: time_sig,
+            bars,
+            rows_per_beat,
         }
     }
 
@@ -106,9 +117,54 @@ impl AppState {
             Action::SetEditStep(step) => {
                 self.edit_step = step;
             }
+            Action::SetTimeSignature {
+                numerator,
+                denominator,
+            } => {
+                if numerator > 0 && denominator > 0 && denominator.is_power_of_two() {
+                    self.time_signature = TimeSignature::new(numerator, denominator);
+                    self.resize_pattern();
+                    effects.push(SideEffect::SendPatternToAudio(self.pattern.clone()));
+                    effects.push(SideEffect::SendTimingToAudio {
+                        rows_per_beat: self.rows_per_beat,
+                        beat_value: self.time_signature.denominator,
+                    });
+                }
+            }
+            Action::SetBars(bars) => {
+                if bars > 0 {
+                    self.bars = bars;
+                    self.resize_pattern();
+                    effects.push(SideEffect::SendPatternToAudio(self.pattern.clone()));
+                }
+            }
+            Action::SetRowsPerBeat(rpb) => {
+                if rpb > 0 {
+                    self.rows_per_beat = rpb;
+                    self.resize_pattern();
+                    effects.push(SideEffect::SendPatternToAudio(self.pattern.clone()));
+                    effects.push(SideEffect::SendTimingToAudio {
+                        rows_per_beat: self.rows_per_beat,
+                        beat_value: self.time_signature.denominator,
+                    });
+                }
+            }
         }
 
         effects
+    }
+
+    /// Recompute the pattern length from time signature, bars, and rows_per_beat,
+    /// then resize the pattern (preserving existing data).
+    fn resize_pattern(&mut self) {
+        let new_rows = self
+            .time_signature
+            .total_rows(self.bars, self.rows_per_beat);
+        self.pattern.resize_rows(new_rows);
+        // Clamp cursor
+        if self.cursor_row >= self.pattern.num_rows {
+            self.cursor_row = self.pattern.num_rows.saturating_sub(1);
+        }
     }
 
     fn move_cursor(&mut self, dir: Direction) {
@@ -331,5 +387,151 @@ mod tests {
         state.apply(Action::NoteKeyPress(NoteKey::P)); // offset 21
                                                        // octave clamped to 8, pitch = 8*12 + 21 = 117
         assert!(state.pattern.get(0, 0).pitch <= 127);
+    }
+
+    #[test]
+    fn test_default_time_signature_and_bars() {
+        let state = AppState::new();
+        assert_eq!(state.time_signature.numerator, 4);
+        assert_eq!(state.time_signature.denominator, 4);
+        assert_eq!(state.bars, 4);
+        assert_eq!(state.rows_per_beat, 4);
+        // 4/4 time, 4 bars, 4 rows/beat = 4 * 4 * 4 = 64 rows
+        assert_eq!(state.pattern.num_rows, 64);
+    }
+
+    #[test]
+    fn test_set_time_signature_resizes_pattern() {
+        let mut state = AppState::new();
+        // Change to 3/4 time: 3 * 4 * 4 = 48 rows
+        state.apply(Action::SetTimeSignature {
+            numerator: 3,
+            denominator: 4,
+        });
+        assert_eq!(state.time_signature.numerator, 3);
+        assert_eq!(state.pattern.num_rows, 48);
+    }
+
+    #[test]
+    fn test_set_bars_resizes_pattern() {
+        let mut state = AppState::new();
+        // 4/4 time, 2 bars: 4 * 2 * 4 = 32 rows
+        state.apply(Action::SetBars(2));
+        assert_eq!(state.bars, 2);
+        assert_eq!(state.pattern.num_rows, 32);
+    }
+
+    #[test]
+    fn test_set_rows_per_beat_resizes_pattern() {
+        let mut state = AppState::new();
+        // 4/4 time, 4 bars, 8 rows/beat: 4 * 4 * 8 = 128 rows
+        state.apply(Action::SetRowsPerBeat(8));
+        assert_eq!(state.rows_per_beat, 8);
+        assert_eq!(state.pattern.num_rows, 128);
+    }
+
+    #[test]
+    fn test_resize_preserves_notes() {
+        let mut state = AppState::new();
+        let note = Note {
+            pitch: 60,
+            instrument: 0,
+            velocity: 100,
+        };
+        state.apply(Action::SetNote {
+            row: 0,
+            channel: 0,
+            note,
+        });
+        // Shrink then grow
+        state.apply(Action::SetBars(1)); // 16 rows
+        assert_eq!(state.pattern.get(0, 0), &note);
+        state.apply(Action::SetBars(4)); // back to 64 rows
+        assert_eq!(state.pattern.get(0, 0), &note);
+    }
+
+    #[test]
+    fn test_shrink_clamps_cursor() {
+        let mut state = AppState::new();
+        state.cursor_row = 60;
+        state.apply(Action::SetBars(1)); // 16 rows, cursor was at 60
+        assert_eq!(state.cursor_row, 15); // clamped to last row
+    }
+
+    #[test]
+    fn test_six_eight_time() {
+        let mut state = AppState::new();
+        // 6/8 time, 4 bars, 4 rows/beat: 6 * 4 * 4 = 96 rows
+        state.apply(Action::SetTimeSignature {
+            numerator: 6,
+            denominator: 8,
+        });
+        assert_eq!(state.pattern.num_rows, 96);
+    }
+
+    #[test]
+    fn test_set_time_signature_emits_timing_effect() {
+        let mut state = AppState::new();
+        let effects = state.apply(Action::SetTimeSignature {
+            numerator: 3,
+            denominator: 4,
+        });
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            SideEffect::SendTimingToAudio {
+                rows_per_beat: 4,
+                beat_value: 4
+            }
+        )));
+    }
+
+    #[test]
+    fn test_set_rows_per_beat_emits_timing_effect() {
+        let mut state = AppState::new();
+        let effects = state.apply(Action::SetRowsPerBeat(8));
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            SideEffect::SendTimingToAudio {
+                rows_per_beat: 8,
+                beat_value: 4
+            }
+        )));
+    }
+
+    #[test]
+    fn test_invalid_time_signature_ignored() {
+        let mut state = AppState::new();
+        // denominator 0
+        state.apply(Action::SetTimeSignature {
+            numerator: 4,
+            denominator: 0,
+        });
+        assert_eq!(state.time_signature.denominator, 4); // unchanged
+                                                         // denominator not power of 2
+        state.apply(Action::SetTimeSignature {
+            numerator: 4,
+            denominator: 3,
+        });
+        assert_eq!(state.time_signature.denominator, 4); // unchanged
+                                                         // numerator 0
+        state.apply(Action::SetTimeSignature {
+            numerator: 0,
+            denominator: 4,
+        });
+        assert_eq!(state.time_signature.numerator, 4); // unchanged
+    }
+
+    #[test]
+    fn test_zero_bars_ignored() {
+        let mut state = AppState::new();
+        state.apply(Action::SetBars(0));
+        assert_eq!(state.bars, 4); // unchanged
+    }
+
+    #[test]
+    fn test_zero_rows_per_beat_ignored() {
+        let mut state = AppState::new();
+        state.apply(Action::SetRowsPerBeat(0));
+        assert_eq!(state.rows_per_beat, 4); // unchanged
     }
 }

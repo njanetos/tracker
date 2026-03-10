@@ -1,7 +1,6 @@
 use super::instrument::InstrumentPlugin;
 use crate::core::pattern::Pattern;
 
-pub const DEFAULT_ROWS_PER_BEAT: f64 = 4.0;
 const MAX_CHANNELS: usize = 64;
 
 #[derive(Clone, Debug)]
@@ -15,23 +14,39 @@ pub struct SequencerState {
 }
 
 impl SequencerState {
-    pub fn new(bpm: f64, sample_rate: f64) -> Self {
+    pub fn new(bpm: f64, sample_rate: f64, rows_per_beat: usize, beat_value: u8) -> Self {
         Self {
             current_row: 0,
             samples_since_tick: 0.0,
-            samples_per_tick: Self::compute_samples_per_tick(bpm, sample_rate),
+            samples_per_tick: Self::compute_samples_per_tick(
+                bpm,
+                sample_rate,
+                rows_per_beat,
+                beat_value,
+            ),
             playing: false,
             active_note: [0; MAX_CHANNELS],
         }
     }
 
-    pub fn compute_samples_per_tick(bpm: f64, sample_rate: f64) -> f64 {
-        let ticks_per_second = (bpm / 60.0) * DEFAULT_ROWS_PER_BEAT;
-        sample_rate / ticks_per_second
+    /// Compute samples per row tick.
+    ///
+    /// BPM defines quarter notes per minute. Each row represents 1/rows_per_beat
+    /// of a denominator-unit beat. The beat_value (denominator) determines the
+    /// relationship to quarter notes: beat_value/4 denominator-beats per quarter note.
+    pub fn compute_samples_per_tick(
+        bpm: f64,
+        sample_rate: f64,
+        rows_per_beat: usize,
+        beat_value: u8,
+    ) -> f64 {
+        let rows_per_second = (bpm / 60.0) * (beat_value as f64 / 4.0) * rows_per_beat as f64;
+        sample_rate / rows_per_second
     }
 
-    pub fn set_bpm(&mut self, bpm: f64, sample_rate: f64) {
-        self.samples_per_tick = Self::compute_samples_per_tick(bpm, sample_rate);
+    pub fn set_bpm(&mut self, bpm: f64, sample_rate: f64, rows_per_beat: usize, beat_value: u8) {
+        self.samples_per_tick =
+            Self::compute_samples_per_tick(bpm, sample_rate, rows_per_beat, beat_value);
     }
 }
 
@@ -112,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_silent_when_stopped() {
-        let mut seq = SequencerState::new(120.0, 44100.0);
+        let mut seq = SequencerState::new(120.0, 44100.0, 4, 4);
         seq.playing = false;
         let pattern = Pattern::new(64, 4);
         let mut instruments = make_instruments(4);
@@ -132,7 +147,7 @@ mod tests {
 
     #[test]
     fn test_sequencer_advances_rows() {
-        let mut seq = SequencerState::new(120.0, 44100.0);
+        let mut seq = SequencerState::new(120.0, 44100.0, 4, 4);
         seq.playing = true;
         // At 120 BPM, 4 rows/beat: ~5512.5 samples per tick
         // Render 12000 samples (> 2 ticks), should advance 2 rows
@@ -158,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_note_triggers_nonzero_output() {
-        let mut seq = SequencerState::new(120.0, 44100.0);
+        let mut seq = SequencerState::new(120.0, 44100.0, 4, 4);
         seq.playing = true;
 
         let mut pattern = Pattern::new(64, 1);
@@ -195,7 +210,7 @@ mod tests {
     fn test_timing_accuracy() {
         let bpm = 120.0;
         let sample_rate = 44100.0;
-        let mut seq = SequencerState::new(bpm, sample_rate);
+        let mut seq = SequencerState::new(bpm, sample_rate, 4, 4);
         seq.playing = true;
 
         let pattern = Pattern::new(64, 1);
@@ -242,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_monophonic_new_note_stops_previous() {
-        let mut seq = SequencerState::new(120.0, 44100.0);
+        let mut seq = SequencerState::new(120.0, 44100.0, 4, 4);
         seq.playing = true;
 
         let mut pattern = Pattern::new(64, 1);
@@ -285,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_note_off_silences_channel() {
-        let mut seq = SequencerState::new(120.0, 44100.0);
+        let mut seq = SequencerState::new(120.0, 44100.0, 4, 4);
         seq.playing = true;
 
         let mut pattern = Pattern::new(64, 1);
@@ -335,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_pattern_wraps() {
-        let mut seq = SequencerState::new(120.0, 44100.0);
+        let mut seq = SequencerState::new(120.0, 44100.0, 4, 4);
         seq.playing = true;
         seq.current_row = 63; // last row of a 64-row pattern
 
@@ -359,5 +374,35 @@ mod tests {
             "Pattern should have wrapped, row={}",
             seq.current_row
         );
+    }
+
+    #[test]
+    fn test_beat_value_affects_timing() {
+        let sample_rate = 44100.0;
+        let bpm = 120.0;
+
+        // In 4/4 time with 4 rows/beat: rows/sec = (120/60) * (4/4) * 4 = 8
+        let spt_44 = SequencerState::compute_samples_per_tick(bpm, sample_rate, 4, 4);
+        assert!((spt_44 - 5512.5).abs() < 0.1);
+
+        // In 6/8 time with 4 rows/beat: rows/sec = (120/60) * (8/4) * 4 = 16
+        // So samples_per_tick should be half
+        let spt_68 = SequencerState::compute_samples_per_tick(bpm, sample_rate, 4, 8);
+        assert!((spt_68 - 2756.25).abs() < 0.1);
+
+        // Verify the ratio
+        assert!((spt_44 / spt_68 - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_rows_per_beat_affects_timing() {
+        let sample_rate = 44100.0;
+        let bpm = 120.0;
+
+        let spt_4 = SequencerState::compute_samples_per_tick(bpm, sample_rate, 4, 4);
+        let spt_8 = SequencerState::compute_samples_per_tick(bpm, sample_rate, 8, 4);
+
+        // Doubling rows_per_beat should halve samples_per_tick
+        assert!((spt_4 / spt_8 - 2.0).abs() < 0.01);
     }
 }
