@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use crate::audio::engine::{AudioCommand, AudioEngine};
 use crate::core::action::SideEffect;
 use crate::core::state::AppState;
-use crate::ui::{pattern_editor, toolbar};
+use crate::ui::{chunk_sidebar, pattern_editor, toolbar};
 
 pub struct TrackerApp {
     state: AppState,
@@ -92,6 +92,17 @@ impl eframe::App for TrackerApp {
                 ui.colored_label(egui::Color32::RED, format!("Audio error: {}", err));
             }
         });
+
+        egui::SidePanel::left("chunk_sidebar")
+            .resizable(false)
+            .exact_width(60.0)
+            .show(ctx, |ui| {
+                let actions = chunk_sidebar::draw_chunk_sidebar(ui, &self.state);
+                for action in actions {
+                    let effects = self.state.apply(action);
+                    self.process_side_effects(effects);
+                }
+            });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let actions = pattern_editor::draw_pattern_editor(ui, &self.state, playback_row);

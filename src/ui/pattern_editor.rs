@@ -21,7 +21,7 @@ fn row_weight(row: usize, state: &AppState) -> u8 {
 
 const CELL_WIDTH: f32 = 64.0;
 const CELL_HEIGHT: f32 = 20.0;
-const ROW_NUM_WIDTH: f32 = 32.0;
+const ROW_NUM_WIDTH: f32 = 36.0;
 
 /// Draw the pattern editor grid and handle keyboard input.
 /// Returns a list of actions to apply.
@@ -86,7 +86,7 @@ pub fn draw_pattern_editor(
                 painter.text(
                     row_rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    format!("{:02X}", row),
+                    format!("{:03}", row),
                     egui::FontId::monospace(13.0),
                     egui::Color32::from_rgb(120, 120, 120),
                 );

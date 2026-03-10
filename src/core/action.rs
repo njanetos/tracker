@@ -110,6 +110,14 @@ pub enum Action {
     SetBars(usize),
     /// Set how many rows represent one beat (denominator-unit).
     SetRowsPerBeat(usize),
+    /// Create a new chunk (assigned the smallest unused number).
+    NewChunk { slot: usize },
+    /// Delete the chunk at the given slot.
+    DeleteChunk { slot: usize },
+    /// Select a chunk slot to edit its pattern.
+    SelectChunk { slot: usize },
+    /// Move a chunk from one slot to another (drag-and-drop reorder).
+    MoveChunk { from_slot: usize, to_slot: usize },
 }
 
 #[derive(Clone, Debug, PartialEq)]
