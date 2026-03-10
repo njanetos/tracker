@@ -1,5 +1,6 @@
 use eframe::egui;
 
+use crate::audio::instrument::InstrumentId;
 use crate::core::action::{Action, Direction, NoteKey};
 use crate::core::pattern::{format_note, NOTE_OFF};
 use crate::core::state::AppState;
@@ -34,6 +35,42 @@ pub fn draw_pattern_editor(
 
     // Handle keyboard input
     actions.extend(handle_keyboard(ui, state));
+
+    // Channel headers with instrument selectors
+    ui.horizontal(|ui| {
+        // Spacer for row number column
+        ui.add_space(ROW_NUM_WIDTH);
+        for ch in 0..state.pattern.num_channels {
+            let current_id = &state.channel_instruments[ch];
+            let current_name = state
+                .available_instruments
+                .iter()
+                .find(|(id, _)| id == current_id)
+                .map(|(_, name)| name.as_str())
+                .unwrap_or(&current_id.0);
+            let response = egui::ComboBox::from_id_salt(format!("inst_ch_{}", ch))
+                .width(CELL_WIDTH - 16.0)
+                .selected_text(current_name)
+                .show_ui(ui, |ui| {
+                    let mut selected_id: Option<InstrumentId> = None;
+                    for (id, name) in &state.available_instruments {
+                        let is_selected = id == current_id;
+                        if ui.selectable_label(is_selected, name).clicked() {
+                            selected_id = Some(id.clone());
+                        }
+                    }
+                    selected_id
+                });
+            if let Some(Some(new_id)) = response.inner {
+                if new_id != *current_id {
+                    actions.push(Action::SetChannelInstrument {
+                        channel: ch,
+                        instrument_id: new_id,
+                    });
+                }
+            }
+        }
+    });
 
     let total_w = ROW_NUM_WIDTH + state.pattern.num_channels as f32 * CELL_WIDTH;
     let total_h = state.pattern.num_rows as f32 * CELL_HEIGHT;
