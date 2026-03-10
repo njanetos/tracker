@@ -8,8 +8,18 @@ pub const DEFAULT_EDIT_STEP: usize = 1;
 pub const DEFAULT_ROWS_PER_BEAT: usize = 4;
 pub const DEFAULT_BARS: usize = 4;
 
+/// A chunk slot: either empty or contains a numbered chunk referencing a pattern.
+#[derive(Clone, Debug)]
+pub struct Chunk {
+    /// The display number for this chunk.
+    pub number: usize,
+    /// The pattern data for this chunk.
+    pub pattern: Pattern,
+}
+
 #[derive(Clone, Debug)]
 pub struct AppState {
+    /// The currently displayed/edited pattern (loaded from the selected chunk).
     pub pattern: Pattern,
     pub cursor_row: usize,
     pub cursor_channel: usize,
@@ -20,6 +30,10 @@ pub struct AppState {
     pub time_signature: TimeSignature,
     pub bars: usize,
     pub rows_per_beat: usize,
+    /// Ordered list of chunk slots. `None` means empty slot.
+    pub chunks: Vec<Option<Chunk>>,
+    /// Index of the currently selected chunk slot (if any).
+    pub selected_chunk: Option<usize>,
 }
 
 impl AppState {
@@ -39,6 +53,8 @@ impl AppState {
             time_signature: time_sig,
             bars,
             rows_per_beat,
+            chunks: vec![None; 8], // Start with 8 empty slots
+            selected_chunk: None,
         }
     }
 
@@ -149,7 +165,75 @@ impl AppState {
                     });
                 }
             }
+            Action::NewChunk { slot } => {
+                if slot < self.chunks.len() && self.chunks[slot].is_none() {
+                    let number = self.smallest_unused_chunk_number();
+                    let num_rows = self
+                        .time_signature
+                        .total_rows(self.bars, self.rows_per_beat);
+                    self.chunks[slot] = Some(Chunk {
+                        number,
+                        pattern: Pattern::new(num_rows, DEFAULT_CHANNELS),
+                    });
+                    // Auto-select the newly created chunk
+                    self.selected_chunk = Some(slot);
+                    self.pattern = self.chunks[slot].as_ref().unwrap().pattern.clone();
+                    effects.push(SideEffect::SendPatternToAudio(self.pattern.clone()));
+                }
+            }
+            Action::DeleteChunk { slot } => {
+                if slot < self.chunks.len() && self.chunks[slot].is_some() {
+                    self.chunks[slot] = None;
+                    if self.selected_chunk == Some(slot) {
+                        self.selected_chunk = None;
+                        // Clear the editor pattern
+                        let num_rows = self
+                            .time_signature
+                            .total_rows(self.bars, self.rows_per_beat);
+                        self.pattern = Pattern::new(num_rows, DEFAULT_CHANNELS);
+                        effects.push(SideEffect::SendPatternToAudio(self.pattern.clone()));
+                    }
+                }
+            }
+            Action::SelectChunk { slot } => {
+                if slot < self.chunks.len() {
+                    // Save current pattern back to previously selected chunk
+                    self.save_current_chunk();
+                    if self.chunks[slot].is_some() {
+                        self.selected_chunk = Some(slot);
+                        self.pattern = self.chunks[slot].as_ref().unwrap().pattern.clone();
+                        self.cursor_row = 0;
+                        self.cursor_channel = 0;
+                        effects.push(SideEffect::SendPatternToAudio(self.pattern.clone()));
+                    }
+                }
+            }
+            Action::MoveChunk { from_slot, to_slot } => {
+                if from_slot < self.chunks.len()
+                    && to_slot < self.chunks.len()
+                    && from_slot != to_slot
+                {
+                    // Remove from source and insert at destination
+                    let chunk = self.chunks.remove(from_slot);
+                    self.chunks.insert(to_slot, chunk);
+                    // Update selected_chunk to follow the moved chunk
+                    if let Some(sel) = self.selected_chunk {
+                        if sel == from_slot {
+                            self.selected_chunk = Some(to_slot);
+                        } else if from_slot < to_slot {
+                            if sel > from_slot && sel <= to_slot {
+                                self.selected_chunk = Some(sel - 1);
+                            }
+                        } else if sel >= to_slot && sel < from_slot {
+                            self.selected_chunk = Some(sel + 1);
+                        }
+                    }
+                }
+            }
         }
+
+        // Keep the selected chunk's pattern in sync with edits
+        self.save_current_chunk();
 
         effects
     }
@@ -165,6 +249,29 @@ impl AppState {
         if self.cursor_row >= self.pattern.num_rows {
             self.cursor_row = self.pattern.num_rows.saturating_sub(1);
         }
+    }
+
+    /// Save the current editor pattern back to the selected chunk.
+    fn save_current_chunk(&mut self) {
+        if let Some(slot) = self.selected_chunk {
+            if let Some(Some(chunk)) = self.chunks.get_mut(slot) {
+                chunk.pattern = self.pattern.clone();
+            }
+        }
+    }
+
+    /// Find the smallest chunk number not already used.
+    fn smallest_unused_chunk_number(&self) -> usize {
+        let used: std::collections::HashSet<usize> = self
+            .chunks
+            .iter()
+            .filter_map(|c| c.as_ref().map(|c| c.number))
+            .collect();
+        let mut n = 0;
+        while used.contains(&n) {
+            n += 1;
+        }
+        n
     }
 
     fn move_cursor(&mut self, dir: Direction) {
@@ -533,5 +640,116 @@ mod tests {
         let mut state = AppState::new();
         state.apply(Action::SetRowsPerBeat(0));
         assert_eq!(state.rows_per_beat, 4); // unchanged
+    }
+
+    #[test]
+    fn test_new_chunk_assigns_smallest_number() {
+        let mut state = AppState::new();
+        state.apply(Action::NewChunk { slot: 0 });
+        assert_eq!(state.chunks[0].as_ref().unwrap().number, 0);
+        state.apply(Action::NewChunk { slot: 1 });
+        assert_eq!(state.chunks[1].as_ref().unwrap().number, 1);
+    }
+
+    #[test]
+    fn test_new_chunk_auto_selects() {
+        let mut state = AppState::new();
+        state.apply(Action::NewChunk { slot: 2 });
+        assert_eq!(state.selected_chunk, Some(2));
+    }
+
+    #[test]
+    fn test_new_chunk_fills_gap_in_numbers() {
+        let mut state = AppState::new();
+        state.apply(Action::NewChunk { slot: 0 }); // number 0
+        state.apply(Action::NewChunk { slot: 1 }); // number 1
+        state.apply(Action::DeleteChunk { slot: 0 }); // free number 0
+        state.apply(Action::NewChunk { slot: 2 }); // should get number 0
+        assert_eq!(state.chunks[2].as_ref().unwrap().number, 0);
+    }
+
+    #[test]
+    fn test_new_chunk_on_occupied_slot_ignored() {
+        let mut state = AppState::new();
+        state.apply(Action::NewChunk { slot: 0 });
+        let num = state.chunks[0].as_ref().unwrap().number;
+        state.apply(Action::NewChunk { slot: 0 }); // should be ignored
+        assert_eq!(state.chunks[0].as_ref().unwrap().number, num);
+    }
+
+    #[test]
+    fn test_delete_chunk() {
+        let mut state = AppState::new();
+        state.apply(Action::NewChunk { slot: 0 });
+        assert!(state.chunks[0].is_some());
+        state.apply(Action::DeleteChunk { slot: 0 });
+        assert!(state.chunks[0].is_none());
+    }
+
+    #[test]
+    fn test_delete_selected_chunk_clears_selection() {
+        let mut state = AppState::new();
+        state.apply(Action::NewChunk { slot: 0 });
+        assert_eq!(state.selected_chunk, Some(0));
+        state.apply(Action::DeleteChunk { slot: 0 });
+        assert_eq!(state.selected_chunk, None);
+    }
+
+    #[test]
+    fn test_select_chunk_loads_pattern() {
+        let mut state = AppState::new();
+        state.apply(Action::NewChunk { slot: 0 });
+        // Edit a note in chunk 0
+        state.apply(Action::NoteKeyPress(NoteKey::A));
+        let chunk0_note = state.pattern.get(0, 0).pitch;
+
+        state.apply(Action::NewChunk { slot: 1 });
+        // Chunk 1 should be empty
+        assert!(state.pattern.get(0, 0).is_empty());
+
+        // Switch back to chunk 0
+        state.apply(Action::SelectChunk { slot: 0 });
+        assert_eq!(state.pattern.get(0, 0).pitch, chunk0_note);
+    }
+
+    #[test]
+    fn test_select_empty_slot_ignored() {
+        let mut state = AppState::new();
+        state.apply(Action::NewChunk { slot: 0 });
+        state.apply(Action::SelectChunk { slot: 3 }); // empty slot
+        assert_eq!(state.selected_chunk, Some(0)); // unchanged
+    }
+
+    #[test]
+    fn test_move_chunk_reorders() {
+        let mut state = AppState::new();
+        state.apply(Action::NewChunk { slot: 0 }); // number 0
+        state.apply(Action::NewChunk { slot: 1 }); // number 1
+        state.apply(Action::MoveChunk {
+            from_slot: 0,
+            to_slot: 1,
+        });
+        // Chunk with number 0 should now be at slot 1
+        assert_eq!(state.chunks[1].as_ref().unwrap().number, 0);
+    }
+
+    #[test]
+    fn test_move_chunk_updates_selection() {
+        let mut state = AppState::new();
+        state.apply(Action::NewChunk { slot: 0 });
+        assert_eq!(state.selected_chunk, Some(0));
+        state.apply(Action::MoveChunk {
+            from_slot: 0,
+            to_slot: 2,
+        });
+        assert_eq!(state.selected_chunk, Some(2));
+    }
+
+    #[test]
+    fn test_initial_chunks_are_empty() {
+        let state = AppState::new();
+        assert_eq!(state.chunks.len(), 8);
+        assert!(state.chunks.iter().all(|c| c.is_none()));
+        assert_eq!(state.selected_chunk, None);
     }
 }
